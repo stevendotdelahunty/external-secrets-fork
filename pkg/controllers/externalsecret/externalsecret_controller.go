@@ -280,7 +280,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	switch externalSecret.Spec.Target.CreationPolicy { //nolint
 	case esv1beta1.CreatePolicyMerge:
-		err = patchSecret(ctx, r.Client, r.Scheme, secret, mutationFunc, externalSecret.Name)
+		err = patchSecret(ctx, r.Client, r.Scheme, secret, mutationFunc, externalSecret.Name, log)
 		if err == nil {
 			externalSecret.Status.Binding = v1.LocalObjectReference{Name: secret.Name}
 		}
@@ -288,9 +288,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		log.V(1).Info("secret creation skipped due to creationPolicy=None")
 		err = nil
 	default:
-		err = createOrUpdate(ctx, r.Client, secret, mutationFunc, externalSecret.Name)
+		log.V(1).Info("Default case. attemtping to create/update")
+		err = createOrUpdate(ctx, r.Client, secret, mutationFunc, externalSecret.Name, log)
 		if err == nil {
 			externalSecret.Status.Binding = v1.LocalObjectReference{Name: secret.Name}
+			log.V(1).Info("Created/Updated secret")
 		}
 	}
 
@@ -303,7 +305,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 
+	log.V(1).Info("Attempting to create event")
 	r.recorder.Event(&externalSecret, v1.EventTypeNormal, esv1beta1.ReasonUpdated, "Updated Secret")
+	log.V(1).Info("Successfully created event")
 	conditionSynced := NewExternalSecretCondition(esv1beta1.ExternalSecretReady, v1.ConditionTrue, esv1beta1.ConditionReasonSecretSynced, "Secret was synced")
 	currCond := GetExternalSecretCondition(externalSecret.Status, esv1beta1.ExternalSecretReady)
 	SetExternalSecretCondition(&externalSecret, *conditionSynced)
@@ -320,7 +324,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}, nil
 }
 
-func createOrUpdate(ctx context.Context, c client.Client, obj client.Object, f func() error, fieldOwner string) error {
+func createOrUpdate(ctx context.Context, c client.Client, obj client.Object, f func() error, fieldOwner string, log logr.Logger) error {
+	log.Info("creating or updating object", "object", obj.GetObjectKind().GroupVersionKind().String())
 	fqdn := fmt.Sprintf(fieldOwnerTemplate, fieldOwner)
 	key := client.ObjectKeyFromObject(obj)
 	if err := c.Get(ctx, key, obj); err != nil {
@@ -346,7 +351,8 @@ func createOrUpdate(ctx context.Context, c client.Client, obj client.Object, f f
 	return c.Update(ctx, obj, client.FieldOwner(fqdn))
 }
 
-func patchSecret(ctx context.Context, c client.Client, scheme *runtime.Scheme, secret *v1.Secret, mutationFunc func() error, fieldOwner string) error {
+func patchSecret(ctx context.Context, c client.Client, scheme *runtime.Scheme, secret *v1.Secret, mutationFunc func() error, fieldOwner string, log logr.Logger) error {
+	log.Info("Patch secret")
 	fqdn := fmt.Sprintf(fieldOwnerTemplate, fieldOwner)
 	err := c.Get(ctx, client.ObjectKeyFromObject(secret), secret.DeepCopy())
 	if apierrors.IsNotFound(err) {
